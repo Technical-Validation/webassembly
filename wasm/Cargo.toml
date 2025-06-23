@@ -1,5 +1,5 @@
 [package]
-name = "webassembly"
+name = "my_wasm_template"
 version = "0.1.0"
 authors = ["Roxi <nanwey@163.com>"]
 edition = "2018"

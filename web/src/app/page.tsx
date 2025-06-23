@@ -1,5 +1,5 @@
 "use client";
-import * as wasm from "webassembly";
+import * as wasm from "my_wasm_template";
 
 export default function Home() {
   const tools = [
