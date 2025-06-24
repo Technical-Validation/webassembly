@@ -15,7 +15,7 @@ extern "C" {
 
 #[wasm_bindgen]
 pub fn greet(from: &str) {
-    alert(&format!("Hello, {}! ()() From WebAssembly", from));
+    alert(&format!("Hello, {}! >>> From WebAssembly", from));
 }
 
 #[wasm_bindgen]

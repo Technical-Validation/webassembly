@@ -4,22 +4,23 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 4000",
-    "wasm-build": "wasm-pack build --target web --out-dir ../wasm/pkg ../wasm",
-    "wasm-link": "cd ../wasm/pkg && yarn link",
-    "web-link": "yarn link my_wasm_template",
-    "web-install": "yarn add file:../wasm/pkg",
+    "build:wasm": "wasm-pack build --target web --out-dir ../wasm/pkg ../wasm",
+    "link:wasm": "cd ../wasm/pkg && yarn link",
+    "link:web": "yarn link my_wasm_template",
+    "install:wasm": "yarn add file:../wasm/pkg",
+    "yarn-install": "yarn",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
+    "@wasm-tool/wasm-pack-plugin": "^1.7.0",
     "clsx": "^2.1.1",
     "my_wasm_template": "file:../wasm/pkg",
     "next": "15.3.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.3.1",
-    "@wasm-tool/wasm-pack-plugin": "^1.7.0"
+    "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
