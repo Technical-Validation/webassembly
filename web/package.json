@@ -8,6 +8,7 @@
     "link:wasm": "cd ../wasm/pkg && yarn link",
     "link:web": "yarn link my_wasm_template",
     "install:wasm": "yarn add file:../wasm/pkg",
+    "wasm:wee_alloc": "cd ../wasm && wasm-pack build --target web --out-dir pkg --no-default-features --features wee_alloc",
     "yarn-install": "yarn",
     "build": "next build",
     "start": "next start",
