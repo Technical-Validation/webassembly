@@ -1,42 +1,13 @@
 "use client";
-import * as wasm from "my_wasm_template";
+import { greet } from "my_wasm_template";
 
 export default function Home() {
   const tools = [
     {
       name: "wasm 调用浏览器 api",
       description: 'wasm.greet("browser") => alert("")',
-      action: async () => {
-        await wasm.default();
-        wasm.greet("browser");
-      },
-    },
-    {
-      name: "直接返回数据",
-      description: "wasm.add(1, 2) => 3",
-      action: async () => {
-        await wasm.default();
-        alert(wasm.add(1, 2));
-      },
-    },
-    {
-      name: "json 数据解析",
-      description:
-        "{\n" +
-        '          name: "John",\n' +
-        "          age: 30,\n" +
-        '          city: "New York",\n' +
-        " }",
-      action: async () => {
-        await wasm.default();
-        const json = {
-          name: "John",
-          age: 30,
-          city: "New York",
-        };
-        const result = wasm.json_reverse(JSON.stringify(json));
-        alert(result);
-        console.log("json reverse result:", JSON.parse(result));
+      action: () => {
+        greet("browser");
       },
     },
   ];

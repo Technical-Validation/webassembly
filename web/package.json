@@ -4,11 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 4000",
-    "build:wasm": "wasm-pack build --target web --out-dir ../wasm/pkg ../wasm",
+    "build:wasm": "wasm-pack build --out-dir ../wasm/pkg ../wasm",
     "link:wasm": "cd ../wasm/pkg && yarn link",
     "link:web": "yarn link my_wasm_template",
     "install:wasm": "yarn add file:../wasm/pkg",
-    "wasm:wee_alloc": "cd ../wasm && wasm-pack build --target web --out-dir pkg --no-default-features --features wee_alloc",
+    "wasm:wee_alloc": "cd ../wasm && wasm-pack build --out-dir pkg --no-default-features --features wee_alloc",
     "yarn-install": "yarn",
     "build": "next build",
     "start": "next start",
