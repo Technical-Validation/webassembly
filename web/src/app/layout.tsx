@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { EnvScript } from "next-runtime-env";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -27,6 +28,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        {/* EnvScript 仅注入 NEXT_PUBLIC_* 变量到浏览器端 (例如公钥 PEM)。不会暴露 PRIVATE_KEY_PEM。*/}
+        <EnvScript />
         {children}
       </body>
     </html>

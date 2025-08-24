@@ -26,6 +26,14 @@ const nextConfig: NextConfig = {
         }),
       );
     }
+
+    // 让 Webpack 以 WebAssembly 异步模块方式处理 .wasm（与 wasm-pack 输出兼容）
+    config.module = (config.module || { rules: [] }) as any;
+    (config.module.rules || []).push({
+      test: /\.wasm$/,
+      type: "webassembly/async",
+    });
+
     return config;
   },
 };
