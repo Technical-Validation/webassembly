@@ -11,6 +11,16 @@ interface StepState {
   error?: string;
 }
 
+function prettyMaybeJson(input?: string): string | undefined {
+  if (typeof input !== "string" || !input.trim()) return input;
+  try {
+    const parsed = JSON.parse(input);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return input;
+  }
+}
+
 export default function Home() {
   const [inputJson, setInputJson] = useState<string>(
     JSON.stringify({ hello: "session aes", clientTime: Date.now() }, null, 2)
@@ -144,13 +154,13 @@ export default function Home() {
         {step.original && (
           <div className="mb-2">
             <div className="text-xs text-gray-500 mb-1">原始内容</div>
-            <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-40 whitespace-pre-wrap break-all">{step.original}</pre>
+            <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-40 whitespace-pre-wrap break-words">{prettyMaybeJson(step.original)}</pre>
           </div>
         )}
         {step.wasm && (
           <div className="mb-2">
             <div className="text-xs text-gray-500 mb-1">WASM 内容</div>
-            <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-40 whitespace-pre-wrap break-all">{step.wasm}</pre>
+            <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-40 whitespace-pre-wrap break-words">{prettyMaybeJson(step.wasm)}</pre>
           </div>
         )}
         {typeof step.timeMs === "number" && (
