@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { normalizePem } from "@/config";
 // Ensure this route runs in Node.js so process.env is available for WASM
 export const runtime = "nodejs";
 // Import the same WASM module on the server via dynamic import below.
@@ -17,6 +18,13 @@ export async function POST(req: NextRequest) {
     }
 
     // 动态导入 WASM 并解密。WASM 会从 env 读取 PRIVATE_KEY_PEM。
+    // 在调用 WASM 之前，规范化 PRIVATE_KEY_PEM，避免换行与缩进导致的 PEM 解析错误
+    if (typeof process !== "undefined") {
+      const normalized = normalizePem(process.env.PRIVATE_KEY_PEM || "");
+      if (normalized) {
+        process.env.PRIVATE_KEY_PEM = normalized;
+      }
+    }
     const mod = (await import("my_wasm_template")) as unknown as {
       default?: () => Promise<void> | void;
       decrypt_hybrid: (packet: string) => string;

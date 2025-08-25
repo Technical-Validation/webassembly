@@ -1,5 +1,5 @@
 "use client";
-import { env } from "next-runtime-env";
+import { PUBLIC_KEY_PEM } from "@/config";
 
 export default function Home() {
   const tools = [
@@ -18,8 +18,13 @@ export default function Home() {
             }
             mod.greet("browser");
           } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
-            alert(`异常: ${String(msg)}`);
+            const msg =
+              e instanceof Error
+                ? e.message
+                : typeof e === "string"
+                  ? e
+                  : JSON.stringify(e);
+            alert(`异常1: ${String(msg)}`);
           }
         })();
       },
@@ -40,20 +45,16 @@ export default function Home() {
               await mod.default();
             }
 
-            // 通过 next-runtime-env 从运行时环境读取公钥（只暴露给客户端的 NEXT_PUBLIC_ 变量）
-            const rawPublicKeyPem = env("NEXT_PUBLIC_PUBLIC_KEY_PEM");
-            if (!rawPublicKeyPem) {
-              alert("缺少 NEXT_PUBLIC_PUBLIC_KEY_PEM，无法加密。请在环境变量中设置公钥。");
+            // 从运行时环境读取公钥
+            if (!PUBLIC_KEY_PEM) {
+              alert(
+                "缺少 NEXT_PUBLIC_PUBLIC_KEY_PEM，无法加密。请在环境变量中设置公钥。",
+              );
               return;
             }
-            // 规范化 PEM：支持 .env 中用 \n 表示换行，以及实际的 CRLF 行尾
-            const publicKeyPem = rawPublicKeyPem
-              .replace(/\\r\\n/g, "\n")
-              .replace(/\\n/g, "\n")
-              .replace(/\\r/g, "\n")
-              .replace(/\r\n/g, "\n")
-              .replace(/\r/g, "\n")
-              .trim();
+
+            // 从配置读取已规范化的公钥 PEM（支持 \n、CRLF、去除缩进等）
+            const publicKeyPem = PUBLIC_KEY_PEM;
 
             const message = "Hello Hybrid Crypto via WASM!";
 
@@ -73,8 +74,13 @@ export default function Home() {
               alert(`服务端解密失败: ${data?.error ?? "未知错误"}`);
             }
           } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
-            alert(`异常: ${String(msg)}`);
+            const msg =
+              e instanceof Error
+                ? e.message
+                : typeof e === "string"
+                  ? e
+                  : JSON.stringify(e);
+            alert(`异常2: ${String(msg)}`);
           }
         })();
       },
