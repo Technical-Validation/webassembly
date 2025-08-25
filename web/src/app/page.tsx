@@ -1,6 +1,11 @@
 "use client";
 import { PUBLIC_KEY_PEM } from "@/config";
 
+/**
+ * Home 组件（客户端组件）
+ * - 展示基于 WASM 的“混合加密 + 会话演示”工具
+ * - 流程：确保/刷新会话密钥 -> 客户端加密 -> 向服务端发送 { wrapped_key_b64, payload } -> 客户端解密返回
+ */
 export default function Home() {
   const tools = [
     {

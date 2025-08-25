@@ -3,6 +3,18 @@ import { NextRequest } from "next/server";
 export const runtime = "nodejs";
 // 动态导入在服务端加载相同的 WASM 模块
 
+/**
+ * POST /api/decrypt
+ * 服务器端处理加密通信的入口。
+ * 入参:
+ * - 请求体 JSON: { wrapped_key_b64: string, payload: string }
+ * 处理:
+ * - 动态加载同一 WASM 模块，使用服务器私钥解包会话密钥；
+ * - 解密客户端 payload，构造响应对象，再用相同会话密钥加密返回。
+ * 返回:
+ * - 200: { ok: true, payload: string } 其中 payload 为 AES 数据包 JSON 字符串
+ * - 4xx/5xx: { ok: false, error: string }
+ */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();

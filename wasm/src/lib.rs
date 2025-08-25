@@ -8,44 +8,60 @@ use wasm_bindgen::JsValue;
 use js_sys::Date;
 use serde_json;
 
+/// 绑定 JS 的 console.log，用于在 WASM 中调用浏览器/Node 控制台输出。
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
 }
 
+// 线程局部的会话状态存储（WASM 环境下每个线程/实例独立）。
 thread_local! {
     static SESSION: RefCell<Option<SessionState>> = RefCell::new(None);
 }
 
 #[derive(Clone)]
+/// 客户端缓存的会话状态：包含原始 AES 密钥、其 RSA 包裹（base64url）以及创建时间和绑定的公钥 PEM。
 struct SessionState {
+    /// 32 字节的 AES-256 会话密钥
     key: [u8; 32],
+    /// 将会话密钥用 RSA-OAEP-256 包裹后的 base64url（无填充）字符串
     wrapped_key_b64: String,
+    /// 会话密钥的创建时间（毫秒），用于判断有效期
     created_ms: u64,
+    /// 与该会话绑定的 RSA 公钥（PEM）；若公钥变化则会新建会话
     pubkey_pem: String,
 }
 
 
+/// 将错误格式化为 JsValue，便于通过 wasm_bindgen 返回给 JS 侧。
 fn js_err<E: core::fmt::Display>(e: E) -> JsValue {
     JsValue::from_str(&format!("{}", e))
 }
 
-// ===== Session-based AES packet (JSON) and helpers =====
-const MAX_AGE_MS: u64 = 15 * 60 * 1000; // 15 minutes
+// ===== 基于会话的 AES 数据包（JSON）及其辅助方法 =====
+/// 会话密钥最长存活时间（毫秒）。默认 15 分钟，过期后需要刷新会话密钥。
+const MAX_AGE_MS: u64 = 15 * 60 * 1000; // 15 分钟
 
 #[derive(Serialize, Deserialize)]
+/// 通过 AES-256-GCM 传输的加密数据包结构（JSON 序列化）。
 struct AesPacket {
+    /// 版本号，用于协议演进（当前为 1）
     v: u8,
-    sym_alg: String, // "AES-256-GCM"
+    /// 对称加密算法名称（固定为 "AES-256-GCM"）
+    sym_alg: String,
+    /// GCM 使用的随机数（nonce），base64url 无填充编码
     nonce_b64: String,
+    /// 密文字节（含认证标签），base64url 无填充编码
     ciphertext_b64: String,
 }
 
+/// 获取当前毫秒级时间戳（调用 JS 的 Date::now）。
 fn now_ms() -> u64 {
     Date::now() as u64
 }
 
+/// 若当前会话未过期且与传入公钥 PEM 匹配，则返回会话状态；否则返回 None。
 fn session_get_if_valid(pubkey_pem: &str) -> Option<SessionState> {
     SESSION.with(|cell| {
         let opt = cell.borrow();
@@ -59,10 +75,12 @@ fn session_get_if_valid(pubkey_pem: &str) -> Option<SessionState> {
     })
 }
 
+/// 获取当前任意会话状态（不校验是否过期/公钥是否匹配）。
 fn session_get_any() -> Option<SessionState> {
     SESSION.with(|cell| cell.borrow().clone())
 }
 
+/// 设置/替换当前线程的会话状态。
 fn session_set(state: SessionState) {
     SESSION.with(|cell| {
         *cell.borrow_mut() = Some(state);
@@ -70,8 +88,9 @@ fn session_set(state: SessionState) {
 }
 
 #[wasm_bindgen]
+/// 确保存在针对给定公钥 PEM 的 AES 会话密钥；若当前会话有效且公钥一致则复用，否则生成新密钥并返回包裹结果（JSON 字符串）。
 pub fn ensure_session_key(public_key_pem: String) -> Result<String, JsValue> {
-    // If there's a valid session for this pubkey, return cached wrapped key
+    // 若该公钥对应的会话仍然有效，直接返回已缓存的包裹会话密钥
     if let Some(st) = session_get_if_valid(&public_key_pem) {
         let out = serde_json::json!({
             "v": 1,
@@ -84,7 +103,7 @@ pub fn ensure_session_key(public_key_pem: String) -> Result<String, JsValue> {
         return Ok(out.to_string());
     }
 
-    // Otherwise, generate a new AES key and wrap it with RSA public key
+    // 否则生成新的 AES 会话密钥，并使用 RSA 公钥进行包裹（RSA-OAEP-256）
     let pub_key = parse_rsa_public_key(&public_key_pem).map_err(js_err)?;
     let sym_key = random_bytes(32).map_err(js_err)?;
     if sym_key.len() != 32 { return Err(JsValue::from_str("failed to generate AES-256 key")); }
@@ -115,8 +134,9 @@ pub fn ensure_session_key(public_key_pem: String) -> Result<String, JsValue> {
 }
 
 #[wasm_bindgen]
+/// 使用当前会话的 AES-256-GCM 加密一个 JSON 字符串（已 stringify），返回 AES 数据包的 JSON 字符串。
 pub fn encrypt_with_session(plaintext_json: String) -> Result<String, JsValue> {
-    // Require a non-expired session key
+    // 需要存在且未过期的会话密钥
     let st = session_get_any().ok_or_else(|| JsValue::from_str("no session key; call ensure_session_key first"))?;
     let age = now_ms().saturating_sub(st.created_ms);
     if age > MAX_AGE_MS {
@@ -134,6 +154,7 @@ pub fn encrypt_with_session(plaintext_json: String) -> Result<String, JsValue> {
 }
 
 #[wasm_bindgen]
+/// 使用当前会话的 AES-256-GCM 解密从服务端或客户端收到的 AES 数据包（JSON 字符串），返回明文字符串。
 pub fn decrypt_with_session(packet_json: String) -> Result<String, JsValue> {
     let packet: AesPacket = serde_json::from_str(&packet_json)
         .map_err(|e| JsValue::from_str(&format!("invalid packet json: {}", e)))?;
@@ -151,6 +172,7 @@ pub fn decrypt_with_session(packet_json: String) -> Result<String, JsValue> {
     Ok(plaintext)
 }
 
+/// 使用服务器私钥从 wrapped_key_b64 解包出 32 字节 AES 会话密钥（仅服务器使用）。
 fn unwrap_session_key_with_priv(wrapped_key_b64: &str) -> Result<[u8; 32], JsValue> {
     let priv_key_pem = read_env_var("PRIVATE_KEY_PEM")
         .ok_or_else(|| JsValue::from_str("PRIVATE_KEY_PEM not found in env (server-only)"))?;
@@ -167,6 +189,10 @@ fn unwrap_session_key_with_priv(wrapped_key_b64: &str) -> Result<[u8; 32], JsVal
 }
 
 #[wasm_bindgen]
+/// 服务器端解密：
+/// - 使用 PRIVATE_KEY_PEM 解包 wrapped_key_b64 得到会话 AES 密钥；
+/// - 使用该密钥解密传入的 AES 数据包（packet_json，JSON 字符串）；
+/// - 返回明文字符串（若不是 UTF-8，将返回错误）。
 pub fn server_decrypt_with_wrapped(wrapped_key_b64: String, packet_json: String) -> Result<String, JsValue> {
     let key = unwrap_session_key_with_priv(&wrapped_key_b64)?;
     let packet: AesPacket = serde_json::from_str(&packet_json)
@@ -181,6 +207,10 @@ pub fn server_decrypt_with_wrapped(wrapped_key_b64: String, packet_json: String)
 }
 
 #[wasm_bindgen]
+/// 服务器端加密：
+/// - 使用 PRIVATE_KEY_PEM 解包 wrapped_key_b64 得到会话 AES 密钥；
+/// - 用该密钥加密 plaintext_json（已 stringify 的 JSON 字符串），生成 AES 数据包；
+/// - 返回 AES 数据包的 JSON 字符串。
 pub fn server_encrypt_with_wrapped(wrapped_key_b64: String, plaintext_json: String) -> Result<String, JsValue> {
     let key = unwrap_session_key_with_priv(&wrapped_key_b64)?;
     let (nonce, ciphertext) = aes_gcm_encrypt(&key, plaintext_json.as_bytes()).map_err(js_err)?;
