@@ -4,20 +4,20 @@ mod utils;
 use serde::{Deserialize, Serialize};
 use utils::*;
 
-/// Hybrid ciphertext packet. All binary fields are base64url (no padding).
+/// 混合密文包。所有二进制字段使用 base64url 编码（无填充）。
 #[derive(Serialize, Deserialize)]
 struct HybridPacket {
-    /// Version tag for forward compatibility
+    /// 版本标签，用于向前兼容
     v: u8,
-    /// Asymmetric algorithm identifier
-    alg: String, // e.g., "RSA-OAEP-256"
-    /// Symmetric algorithm identifier
-    sym_alg: String, // e.g., "AES-256-GCM"
-    /// 12-byte GCM nonce
+    /// 非对称算法标识符
+    alg: String, // 例如 "RSA-OAEP-256"
+    /// 对称算法标识符
+    sym_alg: String, // 例如 "AES-256-GCM"
+    /// 12 字节 GCM 随机数（nonce）
     nonce_b64: String,
-    /// RSA-wrapped symmetric key
+    /// 用 RSA 包裹的对称密钥
     wrapped_key_b64: String,
-    /// AES-GCM ciphertext (includes tag)
+    /// AES-GCM 密文（包含认证标签 tag ）
     ciphertext_b64: String,
 }
 
@@ -29,11 +29,11 @@ extern "C" {
 
 #[wasm_bindgen]
 pub fn greet(name: &str) {
-    // Demonstrate calling browser API from WASM (client side only)
+    // 演示从 WASM 调用浏览器 API（仅在客户端生效）
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
-    // Try using window.alert when in the browser; fall back to console.log otherwise
+    // 在浏览器中尝试使用 window.alert；否则退回 console.log
     if let Some(w) = web_sys::window() {
         let _ = w.alert_with_message(&format!("Hello, {} from WASM!", name));
     } else {
@@ -41,27 +41,27 @@ pub fn greet(name: &str) {
     }
 }
 
-/// Encrypt using hybrid scheme (RSA-OAEP-256 + AES-256-GCM).
-/// - public_key_pem: PEM string of the RSA public key (SPKI/PKCS#8 public key).
-/// - plaintext: UTF-8 plaintext to encrypt.
-/// Returns: JSON string of HybridPacket with base64url-encoded fields.
+/// 使用混合加密方案（RSA-OAEP-256 + AES-256-GCM）。
+/// - public_key_pem：RSA 公钥的 PEM 字符串（SPKI/PKCS#8 公钥）。
+/// - plaintext：需要加密的 UTF-8 明文。
+/// 返回：包含 base64url 字段的 HybridPacket JSON 字符串。
 #[wasm_bindgen]
 pub fn encrypt_hybrid(public_key_pem: String, plaintext: String) -> Result<String, JsValue> {
-    // Parse public key
+    // 解析公钥
     let pub_key = parse_rsa_public_key(&public_key_pem).map_err(js_err)?;
 
-    // Generate a random 32-byte AES key
+    // 生成 32 字节随机 AES 密钥
     let sym_key = random_bytes(32).map_err(js_err)?;
     let mut key_arr = [0u8; 32];
     key_arr.copy_from_slice(&sym_key);
 
-    // Encrypt plaintext using AES-256-GCM
+    // 使用 AES-256-GCM 加密明文
     let (nonce, ciphertext) = aes_gcm_encrypt(&key_arr, plaintext.as_bytes()).map_err(js_err)?;
 
-    // Wrap the symmetric key using RSA-OAEP-256
+    // 使用 RSA-OAEP-256 包裹（加密）对称密钥
     let wrapped_key = rsa_oaep_wrap(&pub_key, &sym_key).map_err(js_err)?;
 
-    // Build packet
+    // 构造数据包
     let packet = HybridPacket {
         v: 1,
         alg: "RSA-OAEP-256".to_string(),
@@ -74,10 +74,10 @@ pub fn encrypt_hybrid(public_key_pem: String, plaintext: String) -> Result<Strin
     serde_json::to_string(&packet).map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
 
-/// Decrypt a hybrid packet using RSA private key fetched from server env.
-/// The private key must be provided on the server as env var: PRIVATE_KEY_PEM
-/// The same WASM is used by both client and server, but decryption will only
-/// succeed on the server where the private key is present in env.
+/// 使用服务端环境变量中的 RSA 私钥解密混合密文包。
+/// 服务器需通过环境变量提供私钥：PRIVATE_KEY_PEM
+/// 客户端与服务端共享同一 WASM 模块，但只有在服务端（存在私钥的环境）
+/// 解密才会成功。
 #[wasm_bindgen]
 pub fn decrypt_hybrid(packet_json: String) -> Result<String, JsValue> {
     // Parse packet JSON first

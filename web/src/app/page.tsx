@@ -89,7 +89,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-8 flex flex-col items-center justify-center">
-      <div className="max-w-7xl mx-auto text-cente w-full">
+      <div className="max-w-7xl mx-auto text-center w-full">
         <h1 className="text-6xl font-bold text-gray-800 mb-16">
           WebAssembly 示例
         </h1>

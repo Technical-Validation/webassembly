@@ -11,12 +11,12 @@ use rsa::{
 };
 use sha2::Sha256;
 
-/// Base64 encode bytes using URL-safe base64 without padding for compact JSON.
+/// 使用 URL 安全且无填充的 base64 编码字节数据（便于紧凑的 JSON）。
 pub fn b64_encode(input: &[u8]) -> String {
     general_purpose::URL_SAFE_NO_PAD.encode(input)
 }
 
-/// Base64 decode URL-safe base64 string without padding.
+/// 解码使用 URL 安全且无填充的 base64 字符串。
 pub fn b64_decode(input: &str) -> Result<Vec<u8>, String> {
     general_purpose::URL_SAFE_NO_PAD
         .decode(input)
