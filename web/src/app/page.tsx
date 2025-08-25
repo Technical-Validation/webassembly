@@ -1,98 +1,204 @@
 "use client";
+import { useState } from "react";
 import { PUBLIC_KEY_PEM } from "@/config";
 
-/**
- * Home 组件（客户端组件）
- * - 展示基于 WASM 的“混合加密 + 会话演示”工具
- * - 流程：确保/刷新会话密钥 -> 客户端加密 -> 向服务端发送 { wrapped_key_b64, payload } -> 客户端解密返回
- */
+type StepStatus = "idle" | "running" | "done" | "error";
+interface StepState {
+  status: StepStatus;
+  original?: string; // 原始内容（进入该步骤前的内容）
+  wasm?: string; // WASM 调用后的内容
+  timeMs?: number; // 本步骤耗时
+  error?: string;
+}
+
 export default function Home() {
-  const tools = [
-    {
-      name: "混合加密 + 会话演示 (全新流程)",
-      description:
-        "客户端 WASM 维护 AES 会话密钥（15 分钟过期），每次发送 wrapped_key_b64 + 加密 payload；服务端用私钥解包后加密返回，仅返回加密内容。",
-      action: () => {
-        void (async () => {
-          try {
-            const mod = (await import("my_wasm_template")) as unknown as {
-              default?: () => Promise<void> | void;
-              ensure_session_key: (pubKeyPem: string) => string;
-              encrypt_with_session: (plaintextJson: string) => string;
-              decrypt_with_session: (packetJson: string) => string;
-            };
-            if (typeof mod.default === "function") {
-              await mod.default();
-            }
+  const [inputJson, setInputJson] = useState<string>(
+    JSON.stringify({ hello: "session aes", clientTime: Date.now() }, null, 2)
+  );
+  const [sending, setSending] = useState(false);
 
-            if (!PUBLIC_KEY_PEM) {
-              alert("缺少 NEXT_PUBLIC_PUBLIC_KEY_PEM，无法建立会话。");
-              return;
-            }
+  const [sessionKeyMs, setSessionKeyMs] = useState<number | undefined>(undefined);
+  const [sessionFresh, setSessionFresh] = useState<boolean | undefined>(undefined);
+  const [wrappedKeyB64, setWrappedKeyB64] = useState<string | undefined>(undefined);
 
-            // 1) 确保/刷新会话密钥（内部若过期会重新生成，并缓存包裹后的密钥）
-            const sessStr = mod.ensure_session_key(PUBLIC_KEY_PEM);
-            const sess = JSON.parse(sessStr) as { wrapped_key_b64: string; fresh: boolean };
+  const [step1, setStep1] = useState<StepState>({ status: "idle" }); // 客户端加密
+  const [step2, setStep2] = useState<StepState>({ status: "idle" }); // 服务端解密
+  const [step3, setStep3] = useState<StepState>({ status: "idle" }); // 服务端对响应加密
+  const [step4, setStep4] = useState<StepState>({ status: "idle" }); // 客户端解密
 
-            // 2) 准备 JSON 业务数据，并在加密前 stringify
-            const clientObj = { hello: "session aes", clientTime: Date.now() };
-            const payloadOut = mod.encrypt_with_session(JSON.stringify(clientObj));
+  function resetSteps() {
+    setStep1({ status: "idle" });
+    setStep2({ status: "idle" });
+    setStep3({ status: "idle" });
+    setStep4({ status: "idle" });
+    setSessionKeyMs(undefined);
+    setSessionFresh(undefined);
+    setWrappedKeyB64(undefined);
+  }
 
-            // 3) 发送到服务端（使用 JSON 协议）
-            const resp = await fetch("/api/decrypt", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              // 始终携带 wrapped_key_b64，保证服务端无状态
-              body: JSON.stringify({ wrapped_key_b64: sess.wrapped_key_b64, payload: payloadOut }),
-            });
-            const data = await resp.json();
-            if (!data?.ok) {
-              throw new Error(data?.error || "服务端错误");
-            }
+  async function onSend() {
+    if (sending) return;
+    resetSteps();
+    setSending(true);
 
-            // 4) 客户端使用会话密钥解密服务端返回的加密 payload，并 parse
-            const plaintext = mod.decrypt_with_session(data.payload);
-            let obj: any;
-            try { obj = JSON.parse(plaintext); } catch { obj = { raw: plaintext }; }
-            alert(`服务端加密返回: ${JSON.stringify(obj, null, 2)}`);
-          } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
-            alert(`异常3: ${String(msg)}`);
-          }
-        })();
-      },
-    },
-  ];
+    try {
+      // 校验 JSON
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(inputJson);
+      } catch (e) {
+        setStep1({ status: "error", error: "输入不是合法 JSON" });
+        setSending(false);
+        return;
+      }
+
+      // 加载 WASM 模块
+      const mod = (await import("my_wasm_template")) as unknown as {
+        default?: () => Promise<void> | void;
+        ensure_session_key: (pubKeyPem: string) => string;
+        encrypt_with_session: (plaintextJson: string) => string;
+        decrypt_with_session: (packetJson: string) => string;
+      };
+      if (typeof mod.default === "function") {
+        await mod.default();
+      }
+      if (!PUBLIC_KEY_PEM) {
+        setStep1({ status: "error", error: "缺少 NEXT_PUBLIC_PUBLIC_KEY_PEM，无法建立会话。" });
+        setSending(false);
+        return;
+      }
+
+      // 会话密钥（仅 TS 侧计时，不写入明文）
+      const tSess0 = performance.now?.() ?? Date.now();
+      const sessStr = mod.ensure_session_key(PUBLIC_KEY_PEM);
+      const tSess1 = performance.now?.() ?? Date.now();
+      setSessionKeyMs(tSess1 - tSess0);
+      const sess = JSON.parse(sessStr) as { wrapped_key_b64: string; fresh: boolean };
+      setSessionFresh(sess.fresh);
+      setWrappedKeyB64(sess.wrapped_key_b64);
+
+      // Step 1: 客户端加密
+      setStep1({ status: "running", original: JSON.stringify(parsed, null, 2) });
+      const tCliEnc0 = performance.now?.() ?? Date.now();
+      const requestCipher = mod.encrypt_with_session(JSON.stringify(parsed));
+      const tCliEnc1 = performance.now?.() ?? Date.now();
+      setStep1({ status: "done", original: JSON.stringify(parsed, null, 2), wasm: requestCipher, timeMs: tCliEnc1 - tCliEnc0 });
+
+      // 调用服务端
+      const resp = await fetch("/api/decrypt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wrapped_key_b64: sess.wrapped_key_b64, payload: requestCipher }),
+      });
+      const data = await resp.json();
+      if (!data?.ok) {
+        const errMsg = data?.error || "服务端错误";
+        setStep2({ status: "error", error: errMsg, original: requestCipher });
+        setSending(false);
+        return;
+      }
+
+      // Step 2: 服务端解密（展示：原始=请求密文；WASM=服务端解出的明文）
+      setStep2({
+        status: "done",
+        original: requestCipher,
+        wasm: typeof data?.debug?.server_decrypted_plaintext === "string" ? data.debug.server_decrypted_plaintext : "",
+        timeMs: data?.timings?.server_decrypt_ms,
+      });
+
+      // Step 3: 服务端对响应加密（展示：原始=服务端响应明文；WASM=响应密文）
+      setStep3({
+        status: "done",
+        original: typeof data?.debug?.server_response_plaintext === "string" ? data.debug.server_response_plaintext : "",
+        wasm: data.payload,
+        timeMs: data?.timings?.server_encrypt_ms,
+      });
+
+      // Step 4: 客户端解密
+      setStep4({ status: "running", original: data.payload });
+      const tCliDec0 = performance.now?.() ?? Date.now();
+      const responsePlain = mod.decrypt_with_session(data.payload);
+      const tCliDec1 = performance.now?.() ?? Date.now();
+      setStep4({ status: "done", original: data.payload, wasm: responsePlain, timeMs: tCliDec1 - tCliDec0 });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+      setStep1((s) => (s.status === "idle" ? { status: "error", error: String(msg) } : s));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function StepCard({ title, step }: { title: string; step: StepState }) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-lg font-semibold text-gray-800">{title}</h3>
+          <span className="text-xs px-2 py-0.5 rounded-full border" data-status={step.status}>
+            {step.status === "idle" && "未开始"}
+            {step.status === "running" && "执行中"}
+            {step.status === "done" && "已完成"}
+            {step.status === "error" && "出错"}
+          </span>
+        </div>
+        {step.error && <div className="text-red-600 text-sm mb-2">{step.error}</div>}
+        {step.original && (
+          <div className="mb-2">
+            <div className="text-xs text-gray-500 mb-1">原始内容</div>
+            <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-40 whitespace-pre-wrap break-all">{step.original}</pre>
+          </div>
+        )}
+        {step.wasm && (
+          <div className="mb-2">
+            <div className="text-xs text-gray-500 mb-1">WASM 内容</div>
+            <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-40 whitespace-pre-wrap break-all">{step.wasm}</pre>
+          </div>
+        )}
+        {typeof step.timeMs === "number" && (
+          <div className="text-xs text-gray-600">耗时: {step.timeMs.toFixed(2)} ms</div>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-8 flex flex-col items-center justify-center">
-      <div className="max-w-7xl mx-auto text-center w-full">
-        <h1 className="text-6xl font-bold text-gray-800 mb-16">
-          WebAssembly 示例
-        </h1>
-        <div className="grid grid-cols-2 gap-8">
-          {tools.map((tool, index) => (
-            <div
-              key={index}
-              className="rounded-3xl relative bg-zinc-700 p-10 shadow-2xl hover:shadow-3xl transition-all duration-300 transform hover:-translate-y-2 border border-white/10 backdrop-blur-sm"
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-6">
+      <div className="max-w-5xl mx-auto space-y-6">
+        <h1 className="text-3xl font-bold text-gray-800">混合加密 + 会话演示 · 测试页面</h1>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <label className="block text-sm font-medium text-gray-700 mb-2">输入 JSON</label>
+          <textarea
+            className="w-full h-40 p-3 border rounded font-mono text-xs"
+            value={inputJson}
+            onChange={(e) => setInputJson(e.target.value)}
+            disabled={sending}
+          />
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              className="px-4 py-2 bg-zinc-800 text-white rounded disabled:opacity-50"
+              onClick={onSend}
+              disabled={sending}
             >
-              <h2 className="text-4xl font-bold text-white mb-2 whitespace-pre-wrap">
-                {tool.name}
-              </h2>
-              <p className="text-xl text-white whitespace-pre-wrap">
-                {tool.description}
-              </p>
-              <button
-                className="mt-8 px-8 py-4 cursor-pointer bg-white bg-opacity-20 rounded-full text-xl font-semibold hover:bg-opacity-30 transition hover:scale-105"
-                onClick={tool.action}
-              >
-                测试
-              </button>
-              <div className="absolute bottom-4 right-4 text-8xl font-bold text-white/10 z-0">
-                {index + 1}
+              {sending ? "发送中..." : "发送"}
+            </button>
+            {typeof sessionKeyMs === "number" && (
+              <div className="text-xs text-gray-600">
+                会话密钥耗时: {sessionKeyMs.toFixed(2)} ms {sessionFresh !== undefined && `(${sessionFresh ? "新建" : "复用"})`}
               </div>
-            </div>
-          ))}
+            )}
+            {wrappedKeyB64 && (
+              <div className="text-xs text-gray-500 truncate max-w-[50%]" title={wrappedKeyB64}>
+                wrapped_key_b64: {wrappedKeyB64}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <StepCard title="步骤 1：客户端加密" step={step1} />
+          <StepCard title="步骤 2：服务端解密" step={step2} />
+          <StepCard title="步骤 3：服务端对响应加密" step={step3} />
+          <StepCard title="步骤 4：客户端解密" step={step4} />
         </div>
       </div>
     </div>

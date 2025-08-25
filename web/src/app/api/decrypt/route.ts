@@ -41,11 +41,13 @@ export async function POST(req: NextRequest) {
 
     // 使用私钥解出 AES 会话密钥后，解密客户端 payload（可选：用于读取业务字段）
     let incomingPlaintext = "";
+    const tServerDec0 = Date.now();
     try {
       incomingPlaintext = mod.server_decrypt_with_wrapped(wrappedKeyB64, payload);
     } catch (e) {
       throw e;
     }
+    const server_decrypt_ms = Date.now() - tServerDec0;
 
     // 示例业务：回显 + 服务器时间戳
     let clientObj: unknown = undefined;
@@ -58,10 +60,17 @@ export async function POST(req: NextRequest) {
     const responseJson = JSON.stringify(responseObj);
 
     // 使用相同 AES 会话密钥加密返回内容
+    const tServerEnc0 = Date.now();
     const outPacket = mod.server_encrypt_with_wrapped(wrappedKeyB64, responseJson);
+    const server_encrypt_ms = Date.now() - tServerEnc0;
+
+    const debug = {
+      server_decrypted_plaintext: incomingPlaintext,
+      server_response_plaintext: responseJson,
+    };
 
     return new Response(
-      JSON.stringify({ ok: true, payload: outPacket }),
+      JSON.stringify({ ok: true, payload: outPacket, timings: { server_decrypt_ms, server_encrypt_ms }, debug }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   } catch (err: unknown) {
