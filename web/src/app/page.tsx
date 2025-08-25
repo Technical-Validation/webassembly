@@ -4,83 +4,55 @@ import { PUBLIC_KEY_PEM } from "@/config";
 export default function Home() {
   const tools = [
     {
-      name: "wasm 调用浏览器 api",
-      description: 'wasm.greet("browser") => alert("")',
-      action: () => {
-        void (async () => {
-          try {
-            const mod = (await import("my_wasm_template")) as unknown as {
-              default?: () => Promise<void> | void;
-              greet: (name: string) => void;
-            };
-            if (typeof mod.default === "function") {
-              await mod.default();
-            }
-            mod.greet("browser");
-          } catch (e: unknown) {
-            const msg =
-              e instanceof Error
-                ? e.message
-                : typeof e === "string"
-                  ? e
-                  : JSON.stringify(e);
-            alert(`异常1: ${String(msg)}`);
-          }
-        })();
-      },
-    },
-    {
-      name: "混合加密演示 (客户端加密 -> 服务端解密)",
+      name: "混合加密 + 会话演示 (全新流程)",
       description:
-        "读取 NEXT_PUBLIC_PUBLIC_KEY_PEM 公钥，在浏览器端用 WASM 进行混合加密，发送到 /api/decrypt 由服务端同一 WASM 模块解密",
+        "客户端 WASM 维护 AES 会话密钥（15 分钟过期），每次发送 wrapped_key_b64 + 加密 payload；服务端用私钥解包后加密返回，仅返回加密内容。",
       action: () => {
         void (async () => {
           try {
-            // 动态导入 WASM 模块并初始化（兼容 async WebAssembly 打包）
             const mod = (await import("my_wasm_template")) as unknown as {
               default?: () => Promise<void> | void;
-              encrypt_hybrid: (pubKeyPem: string, msg: string) => string;
+              ensure_session_key: (pubKeyPem: string) => string;
+              encrypt_with_session: (plaintextJson: string) => string;
+              decrypt_with_session: (packetJson: string) => string;
             };
             if (typeof mod.default === "function") {
               await mod.default();
             }
 
-            // 从运行时环境读取公钥
             if (!PUBLIC_KEY_PEM) {
-              alert(
-                "缺少 NEXT_PUBLIC_PUBLIC_KEY_PEM，无法加密。请在环境变量中设置公钥。",
-              );
+              alert("缺少 NEXT_PUBLIC_PUBLIC_KEY_PEM，无法建立会话。");
               return;
             }
 
-            // 从配置读取已规范化的公钥 PEM（支持 \n、CRLF、去除缩进等）
-            const publicKeyPem = PUBLIC_KEY_PEM;
+            // 1) 确保/刷新会话密钥（内部若过期会重新生成，并缓存包裹后的密钥）
+            const sessStr = mod.ensure_session_key(PUBLIC_KEY_PEM);
+            const sess = JSON.parse(sessStr) as { wrapped_key_b64: string; fresh: boolean };
 
-            const message = "Hello Hybrid Crypto via WASM!";
+            // 2) 准备 JSON 业务数据，并在加密前 stringify
+            const clientObj = { hello: "session aes", clientTime: Date.now() };
+            const payloadOut = mod.encrypt_with_session(JSON.stringify(clientObj));
 
-            // 使用相同的 WASM 模块在客户端执行混合加密（RSA-OAEP-256 + AES-256-GCM）
-            const packetJson = mod.encrypt_hybrid(publicKeyPem, message);
-
-            // 发送到服务端 API，由服务端用相同 WASM 模块解密（WASM 内部从 env 读取 PRIVATE_KEY_PEM）
+            // 3) 发送到服务端（使用 JSON 协议）
             const resp = await fetch("/api/decrypt", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ packet: packetJson }),
+              // 始终携带 wrapped_key_b64，保证服务端无状态
+              body: JSON.stringify({ wrapped_key_b64: sess.wrapped_key_b64, payload: payloadOut }),
             });
             const data = await resp.json();
-            if (data?.ok) {
-              alert(`服务端解密成功: ${data.plaintext}`);
-            } else {
-              alert(`服务端解密失败: ${data?.error ?? "未知错误"}`);
+            if (!data?.ok) {
+              throw new Error(data?.error || "服务端错误");
             }
+
+            // 4) 客户端使用会话密钥解密服务端返回的加密 payload，并 parse
+            const plaintext = mod.decrypt_with_session(data.payload);
+            let obj: any;
+            try { obj = JSON.parse(plaintext); } catch { obj = { raw: plaintext }; }
+            alert(`服务端加密返回: ${JSON.stringify(obj, null, 2)}`);
           } catch (e: unknown) {
-            const msg =
-              e instanceof Error
-                ? e.message
-                : typeof e === "string"
-                  ? e
-                  : JSON.stringify(e);
-            alert(`异常2: ${String(msg)}`);
+            const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+            alert(`异常3: ${String(msg)}`);
           }
         })();
       },

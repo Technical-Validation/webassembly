@@ -68,7 +68,8 @@ pub fn parse_rsa_public_key(pem: &str) -> Result<RsaPublicKey, String> {
 
 /// Parse a PEM-formatted RSA private key.
 pub fn parse_rsa_private_key(pem: &str) -> Result<RsaPrivateKey, String> {
-    RsaPrivateKey::from_pkcs8_pem(pem).map_err(|e| format!("invalid private key: {}", e))
+    RsaPrivateKey::from_pkcs8_pem(pem)
+        .map_err(|e8| format!("Invalid private key: PKCS#8 parse error: {}", e8))
 }
 
 /// Wrap (encrypt) a symmetric key using RSA-OAEP with SHA-256.
@@ -103,16 +104,55 @@ pub fn read_env_var(name: &str) -> Option<String> {
     if val.is_undefined() || val.is_null() {
         None
     } else {
-        // Normalize common encodings used in .env: replace literal "\\n" with newline, handle CRLF
+        // Read as string
         let mut s = val.as_string().unwrap_or_default();
+
+        // Remove UTF-8 BOM if present
+        s = s.trim_start_matches('\u{feff}').to_string();
+
+        // Strip wrapping quotes if present
+        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+            s = s[1..s.len().saturating_sub(1)].to_string();
+        }
+
+        // Normalize literal escape sequences to actual newlines
         if s.contains("\\n") || s.contains("\\r") {
             s = s
                 .replace("\\r\\n", "\n")
                 .replace("\\n", "\n")
                 .replace("\\r", "\n");
         }
-        // Also normalize any actual CRLF that might be present
-        let s = s.replace("\r\n", "\n").replace("\r", "\n");
-        Some(s.trim().to_string())
+        // Normalize any actual CRLF/CR to LF
+        s = s.replace("\r\n", "\n").replace("\r", "\n");
+
+        // Split, trim each line, and keep only BEGIN..END block when present
+        let raw_lines: Vec<String> = s
+            .split('\n')
+            .map(|l| l.trim().to_string())
+            .collect();
+
+        let mut begin_idx: Option<usize> = None;
+        let mut end_idx: Option<usize> = None;
+        for (i, l) in raw_lines.iter().enumerate() {
+            if begin_idx.is_none() && l.starts_with("-----BEGIN ") && l.ends_with("-----") {
+                begin_idx = Some(i);
+            } else if begin_idx.is_some() && l.starts_with("-----END ") && l.ends_with("-----") {
+                end_idx = Some(i);
+                break;
+            }
+        }
+
+        let lines: Vec<String> = if let (Some(b), Some(e)) = (begin_idx, end_idx) {
+            raw_lines[b..=e].to_vec()
+        } else {
+            raw_lines.into_iter().filter(|l| !l.is_empty()).collect()
+        };
+
+        // Reconstruct content and ensure trailing newline
+        let mut out = lines.join("\n");
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        Some(out)
     }
 }

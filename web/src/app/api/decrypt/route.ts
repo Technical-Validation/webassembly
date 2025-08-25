@@ -1,43 +1,58 @@
 import { NextRequest } from "next/server";
-import { normalizePem } from "@/config";
 // 确保该路由在 Node.js 运行，以便 WASM 可以访问 process.env
 export const runtime = "nodejs";
-// 通过动态导入在服务端加载相同的 WASM 模块
-// 在调用 decrypt_hybrid 时，WASM 会从 process.env 读取 PRIVATE_KEY_PEM
+// 动态导入在服务端加载相同的 WASM 模块
 
 export async function POST(req: NextRequest) {
   try {
-    // 期望请求体为 JSON，形如 { packet: string }
     const body = await req.json();
-    const packet: string = body?.packet;
-    if (typeof packet !== "string") {
-      return new Response(JSON.stringify({ error: "缺少 packet" }), {
+
+    // 延迟加载 WASM（WASM 内部自行从 env 读取并规范化 PRIVATE_KEY_PEM）
+    const mod = (await import("my_wasm_template")) as unknown as {
+      default?: () => Promise<void> | void;
+      server_decrypt_with_wrapped: (wrappedKeyB64: string, packet: string) => string;
+      server_encrypt_with_wrapped: (wrappedKeyB64: string, plaintextJson: string) => string;
+    };
+    if (typeof mod.default === "function") {
+      await mod.default();
+    }
+
+    // 仅支持全新 JSON 协议：{ wrapped_key_b64: string, payload: string }
+    const wrappedKeyB64 = body?.wrapped_key_b64;
+    const payload = body?.payload;
+    if (typeof wrappedKeyB64 !== "string" || typeof payload !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "缺少 wrapped_key_b64 或 payload" }), {
         status: 400,
         headers: { "content-type": "application/json" },
       });
     }
 
-    // 动态导入 WASM 并解密。WASM 会从 env 读取 PRIVATE_KEY_PEM。
-    // 在调用 WASM 之前，规范化 PRIVATE_KEY_PEM，避免换行与缩进导致的 PEM 解析错误
-    const normalized = normalizePem(process.env.PRIVATE_KEY_PEM || "");
-    if (normalized) {
-      process.env.PRIVATE_KEY_PEM = normalized;
+    // 使用私钥解出 AES 会话密钥后，解密客户端 payload（可选：用于读取业务字段）
+    let incomingPlaintext = "";
+    try {
+      incomingPlaintext = mod.server_decrypt_with_wrapped(wrappedKeyB64, payload);
+    } catch (e) {
+      throw e;
     }
-    const mod = (await import("my_wasm_template")) as unknown as {
-      default?: () => Promise<void> | void;
-      decrypt_hybrid: (packet: string) => string;
+
+    // 示例业务：回显 + 服务器时间戳
+    let clientObj: unknown = undefined;
+    try { clientObj = JSON.parse(incomingPlaintext); } catch {}
+    const responseObj = {
+      echo: clientObj ?? incomingPlaintext,
+      serverTime: Date.now(),
+      msg: "server encrypted response",
     };
-    if (typeof mod.default === "function") {
-      await mod.default();
-    }
-    const plaintext = mod.decrypt_hybrid(packet);
+    const responseJson = JSON.stringify(responseObj);
+
+    // 使用相同 AES 会话密钥加密返回内容
+    const outPacket = mod.server_encrypt_with_wrapped(wrappedKeyB64, responseJson);
 
     return new Response(
-      JSON.stringify({ ok: true, plaintext }),
+      JSON.stringify({ ok: true, payload: outPacket }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   } catch (err: unknown) {
-    // 若缺少 PRIVATE_KEY_PEM 或解密失败，则返回错误信息
     const message = err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
     return new Response(
       JSON.stringify({ ok: false, error: String(message) }),
